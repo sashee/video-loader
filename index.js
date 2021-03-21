@@ -81,7 +81,6 @@ module.exports = function (source) {
 				};
 			}else {
 				return withTempDir(async (dir) => {
-					console.log(this.resource);
 					const options = this.getOptions();
 					const speed = options.speed || 1;
 
@@ -89,23 +88,23 @@ module.exports = function (source) {
 
 					await fs.writeFile(inputFile, source, {encoding: "binary"});
 
+					const processedVideoPath = path.join(dir, "processed.webm");
+
+					await exec(`ffmpeg -i ${inputFile} -c:v libvpx-vp9 ${options.ultrafast !== undefined ? "-deadline realtime -cpu-used 8 -crf 63 -b:v 0 -vf scale=320:-1 -preset ultrafast -speed 12 " : ""}-an -filter:v "setpts=${1/speed}*PTS" ${processedVideoPath}`);
+
+					const processedVideo = await fs.readFile(processedVideoPath);
+
 					const firstImagePath = path.join(dir, "first.jpg");
 
-					await exec(`ffmpeg -i ${inputFile} -vf "select=eq(n\\,0)" -q:v 1 ${firstImagePath}`);
+					await exec(`ffmpeg -i ${processedVideoPath} -vf "select=eq(n\\,0)" -q:v 1 ${firstImagePath}`);
 
 					const lastImagePath = path.join(dir, "last.jpg");
 
-					await exec(`ffmpeg -sseof -1 -i ${inputFile} -update 1 -q:v 1 ${lastImagePath}`);
+					await exec(`ffmpeg -sseof -1 -i ${processedVideoPath} -update 1 -q:v 1 ${lastImagePath}`);
 
 					const firstImage = await fs.readFile(firstImagePath);
 
 					const lastImage = await fs.readFile(lastImagePath);
-
-					const processedVideoPath = path.join(dir, "processed.webm");
-
-					await exec(`ffmpeg -i ${inputFile} -an -filter:v "setpts=${1/speed}*PTS" ${processedVideoPath}`);
-
-					const processedVideo = await fs.readFile(processedVideoPath);
 
 					const {stdout: numFrames} = await exec(`ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 ${processedVideoPath}`);
 
