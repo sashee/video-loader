@@ -90,7 +90,7 @@ module.exports = function (source) {
 
 					const processedVideoPath = path.join(dir, "processed.webm");
 
-					await exec(`ffmpeg -i ${inputFile} -c:v libvpx-vp9 ${options.ultrafast !== undefined ? "-deadline realtime -cpu-used 8 -crf 63 -b:v 0 -vf scale=320:-1 -preset ultrafast -speed 12 " : ""}-an -filter:v "setpts=${1/speed}*PTS" ${processedVideoPath}`);
+					await exec(`ffmpeg -i ${inputFile} -c:v libvpx-vp9 ${options.ultrafast !== undefined ? "-deadline realtime -cpu-used 8 -crf 63 -b:v 0 -vf scale=320:-1 -preset ultrafast -speed 12" : "-lossless 1"} -an -filter:v "setpts=${1/speed}*PTS" ${processedVideoPath}`);
 
 					const processedVideo = await fs.readFile(processedVideoPath);
 
