@@ -13,7 +13,7 @@ const pjson = require("./package.json");
 
 const finished = util.promisify(stream.finished);
 
-const thunk = findCacheDir({name: "pdf-loader", thunk: true});
+const thunk = findCacheDir({name: pjson.name, thunk: true});
 
 const sha = (x) => crypto.createHash("sha256").update(x).digest("hex");
 
