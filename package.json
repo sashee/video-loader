@@ -1,12 +1,21 @@
 {
   "name": "video-loader",
   "version": "1.0.0",
-  "description": "",
+  "description": "WebPack loader to make some transformations to video files and extract some data",
+	"keywords": [
+    "webpack",
+    "loader",
+		"video"
+  ],
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
+	"repository": "github:sashee/video-loader",
+  "author": {
+    "name": "Tamas Sallai",
+    "url": "https://advancedweb.hu/"
+  },
   "license": "ISC",
   "dependencies": {
     "find-cache-dir": "^3.3.1",
