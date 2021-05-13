@@ -41,7 +41,7 @@ This loads the ```create-user@1.webm```, then splits it into 3 scenes:
 
 The result is an object, similar to this:
 
-```json
+```
 {
 	firstImage: "/create-user@1-frame-first-4ca1e05c9e180c5f9b135aa9734cfe81.jpg",
 	height: 1080,
