@@ -63,7 +63,7 @@ const withTempDir = async (fn) => {
 module.exports = function (source) {
 	const callback = this.async();
 	(async () => {
-		const cacheFile = path.join(await getCacheDir(), sha(await getVersionHash() + sha(source) + sha(this.request)));
+		const cacheFile = path.join(await getCacheDir(), sha(await getVersionHash() + sha(source) + sha(this.request) + sha(process.env.NODE_ENV)));
 		const data = await (async () => {
 			if (await fileExists(cacheFile)) {
 				const file = await fs.readFile(cacheFile);
@@ -71,51 +71,96 @@ module.exports = function (source) {
 				const zip = await JSZip.loadAsync(file);
 
 				const data = JSON.parse(await zip.file("data.json").async("text"));
+				const scenesInZip = zip.folder("scenes").folder(/^\d+\//);
+				const scenes = await Promise.all(scenesInZip.map(async ({name}) => {
+					const sceneFolder = zip.folder(name);
+					const sceneData = JSON.parse(await sceneFolder.file("data.json").async("text"));
+					const video = await sceneFolder.file("video.webm").async("nodebuffer");
+					const lastImage = await sceneFolder.file("last.jpg").async("nodebuffer");
+
+					return {
+						numFrames: sceneData.numFrames,
+						duration: sceneData.duration,
+						video,
+						lastImage,
+					};
+				}));
 				return {
 					firstImage: await zip.file("first.jpg").async("nodebuffer"),
-					lastImage: await zip.file("last.jpg").async("nodebuffer"),
-					numFrames: data.numFrames,
-					processedVideo: await zip.file("video.webm").async("nodebuffer"),
+					scenes,
 					width: data.width,
 					height: data.height,
 				};
 			}else {
 				return withTempDir(async (dir) => {
-					const options = this.getOptions();
-					const speed = options.speed || 1;
+					const options = loaderUtils.getOptions(this);
+					options.scenes.reduce((memo, {end}) => {
+						const realEnd = end === undefined ? Number.MAX_SAFE_INTEGER : end;
+						if (memo >= realEnd) {
+							throw new Error(`Scene ends must be increasing numbers. ${end} >= ${memo}`);
+						}
+						return realEnd;
+					}, 0);
 
-					const inputFile = path.join(dir, `input.${path.extname(this.resource)}`);
-
+					const inputFile = path.join(dir, `input${path.extname(this.resource)}`);
 					await fs.writeFile(inputFile, source, {encoding: "binary"});
 
-					const processedVideoPath = path.join(dir, "processed.webm");
+					const firstImage = await (async () => {
+						const firstImagePath = path.join(dir, "first.jpg");
 
-					await exec(`ffmpeg -i ${inputFile} -c:v libvpx-vp9 ${options.ultrafast !== undefined ? "-deadline realtime -cpu-used 8 -crf 63 -b:v 0 -vf scale=320:-1 -preset ultrafast -speed 12" : "-lossless 1"} -an -filter:v "setpts=${1/speed}*PTS" ${processedVideoPath}`);
+						await exec(`ffmpeg -i ${inputFile} -vf "select=eq(n\\,0)" -q:v 1 ${firstImagePath}`);
 
-					const processedVideo = await fs.readFile(processedVideoPath);
+						return await fs.readFile(firstImagePath);
+					})();
 
-					const firstImagePath = path.join(dir, "first.jpg");
+					const {width, height} = await (async () => {
+						const {stdout: dimensions} = await exec(`ffprobe -v error -show_entries stream=width,height -of json ${inputFile}`);
+						return JSON.parse(dimensions).streams[0];
+					})();
 
-					await exec(`ffmpeg -i ${processedVideoPath} -vf "select=eq(n\\,0)" -q:v 1 ${firstImagePath}`);
+					const processedScenes = await Promise.all(options.scenes.map(async ({end, speed}, i, l) => {
+						const start = i === 0 ? 0 : l[i - 1].end;
+						const processedVideoPath = path.join(dir, `scene-${i}.webm`);
 
-					const lastImagePath = path.join(dir, "last.jpg");
+						await exec(`ffmpeg -ss ${start} ${end !== undefined ? `-to ${end}` : ""} -i ${inputFile} -c:v libvpx-vp9 ${options.ultrafast_dev !== undefined && process.env.NODE_ENV === "development" ? "-deadline realtime -cpu-used 8 -crf 63 -b:v 0 -vf scale=320:-1 -preset ultrafast -speed 12" : "-lossless 1"} -an -filter:v "setpts=${1/(speed !== undefined ? speed : 1)}*PTS" ${processedVideoPath}`);
 
-					await exec(`ffmpeg -sseof -1 -i ${processedVideoPath} -update 1 -q:v 1 ${lastImagePath}`);
+						const processedVideo = await fs.readFile(processedVideoPath);
 
-					const firstImage = await fs.readFile(firstImagePath);
+						const lastImage = await (async () => {
+							const lastImagePath = path.join(dir, `scene-last-${i}.jpg`);
 
-					const lastImage = await fs.readFile(lastImagePath);
+							await exec(`ffmpeg -ss ${start} ${end !== undefined ? `-to ${end}` : ""} -i ${inputFile} -update 1 -q:v 1 ${lastImagePath}`);
 
-					const {stdout: numFrames} = await exec(`ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 ${processedVideoPath}`);
+							return await fs.readFile(lastImagePath);
+						})();
 
-					const {stdout: dimensions} = await exec(`ffprobe -v error -show_entries stream=width,height -of json ${processedVideoPath}`);
-					const {width, height} = JSON.parse(dimensions).streams[0];
+						const {stdout: numFrames} = await exec(`ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 ${processedVideoPath}`);
+						const duration = await (async () => {
+							const ffmpegCommand = `ffmpeg -i ${processedVideoPath} -v quiet -stats -f null -`;
+							const {stderr: durationString} = await exec(ffmpegCommand);
+							const {hours, minutes, seconds, mss} = durationString.trim().match(/time=(?<hours>\d+):(?<minutes>\d+):(?<seconds>\d+)\.(?<mss>\d+)\s[^\r]*$/).groups;
+							return parseInt(hours, 10) * 60 * 60 + parseInt(minutes, 10) * 60 + parseInt(seconds, 10) + parseInt(mss, 10) / 1000;
+						})();
+
+						return {
+							video: processedVideo,
+							lastImage,
+							numFrames: Number(numFrames),
+							duration,
+						};
+					}));
 
 					const zip = new JSZip();
 					zip.file("first.jpg", firstImage);
-					zip.file("last.jpg", lastImage);
-					zip.file("video.webm", processedVideo);
-					zip.file("data.json", JSON.stringify({numFrames, width, height}));
+					zip.file("data.json", JSON.stringify({width, height}));
+					const scenesFolder = zip.folder("scenes");
+					processedScenes.forEach(({video, lastImage, numFrames, duration}, i) => {
+						const sceneFolder = scenesFolder.folder(String(i));
+						sceneFolder.file("video.webm", video);
+						sceneFolder.file("last.jpg", lastImage);
+						sceneFolder.file("data.json", JSON.stringify({numFrames, duration}));
+					});
+
 					await finished(
 						zip.generateNodeStream({streamFiles: true})
 							.pipe(createWriteStream(cacheFile))
@@ -123,9 +168,7 @@ module.exports = function (source) {
 
 					return {
 						firstImage,
-						lastImage,
-						numFrames: Number(numFrames),
-						processedVideo,
+						scenes: processedScenes,
 						width,
 						height,
 					};
@@ -135,16 +178,22 @@ module.exports = function (source) {
 
 		const firstImageName = loaderUtils.interpolateName(this, "[name]-frame-first-[contenthash].jpg", {content: data.firstImage});
 		this.emitFile(firstImageName, data.firstImage);
-		const lastImageName = loaderUtils.interpolateName(this, "[name]-frame-last-[contenthash].jpg", {content: data.lastImage});
-		this.emitFile(lastImageName, data.lastImage);
-		const processedVideoName = loaderUtils.interpolateName(this, "[name]-[contenthash].webm", {content: data.processedVideo});
-		this.emitFile(processedVideoName, data.processedVideo);
+		const scenes = data.scenes.map(({video, lastImage, numFrames, duration}, i) => {
+			const lastImageName = loaderUtils.interpolateName(this, `[name]-scene-${i}-last-[contenthash].jpg`, {content: lastImage});
+			this.emitFile(lastImageName, lastImage);
+			const videoName = loaderUtils.interpolateName(this, `[name]-scene-${i}-[contenthash].webm`, {content: video});
+			this.emitFile(videoName, video);
+			return {
+				lastImage: `${ASSET_PATH}${lastImageName}`,
+				video: `${ASSET_PATH}${videoName}`,
+				numFrames,
+				duration,
+			};
+		});
 
 		const results = {
 			firstImage: `${ASSET_PATH}${firstImageName}`,
-			lastImage: `${ASSET_PATH}${lastImageName}`,
-			numFrames: Number(data.numFrames),
-			video: `${ASSET_PATH}${processedVideoName}`,
+			scenes,
 			width: data.width,
 			height: data.height,
 		};
