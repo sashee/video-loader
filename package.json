@@ -1,6 +1,6 @@
 {
   "name": "video-loader",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "WebPack loader to make some transformations to video files and extract some data",
   "keywords": [
     "webpack",
