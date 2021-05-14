@@ -118,7 +118,9 @@ module.exports = function (source) {
 						return JSON.parse(dimensions).streams[0];
 					})();
 
-					const processedScenes = await Promise.all(options.scenes.map(async ({end, speed}, i, l) => {
+					const processedScenes = await options.scenes.reduce(async (memo, {end, speed}, i, l) => {
+						await memo;
+
 						const start = i === 0 ? 0 : l[i - 1].end;
 						const processedVideoPath = path.join(dir, `scene-${i}.webm`);
 
@@ -142,13 +144,16 @@ module.exports = function (source) {
 							return parseInt(hours, 10) * 60 * 60 + parseInt(minutes, 10) * 60 + parseInt(seconds, 10) + parseInt(mss, 10) / 1000;
 						})();
 
-						return {
-							video: processedVideo,
-							lastImage,
-							numFrames: Number(numFrames),
-							duration,
-						};
-					}));
+						return [
+							...await memo,
+							{
+								video: processedVideo,
+								lastImage,
+								numFrames: Number(numFrames),
+								duration,
+							}
+						];
+					}, []);
 
 					const zip = new JSZip();
 					zip.file("first.jpg", firstImage);
